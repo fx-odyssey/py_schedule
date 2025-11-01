@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flask + Celery 任务调度系统</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .task-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .server-info { background: #e7f3ff; padding: 10px; border-radius: 5px; margin-bottom: 20px; }
+        button { background: #007bff; color: white; border: none; padding: 10px 15px; margin: 5px; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        .progress { width: 100%; background: #e9ecef; border-radius: 4px; margin: 10px 0; }
+        .progress-bar { height: 20px; background: #28a745; border-radius: 4px; width: 0%; transition: width 0.3s; }
+        .task-status { padding: 10px; margin: 10px 0; border-radius: 4px; }
+        .pending { background: #fff3cd; border: 1px solid #ffeaa7; }
+        .progressing { background: #cce7ff; border: 1px solid #b3d7ff; }
+        .success { background: #d4edda; border: 1px solid #c3e6cb; }
+        .failure { background: #f8d7da; border: 1px solid #f5c6cb; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Flask + Celery + Redis 任务调度系统</h1>
+
+        <div class="server-info">
+            <h3>📡 服务器信息</h3>
+            <p><strong>服务器IP:</strong> {{ server_ip }}</p>
+            <p><strong>应用地址:</strong> <a href="http://{{ server_ip }}:5000" target="_blank">http://{{ server_ip }}:5000</a></p>
+            <p><strong>监控地址:</strong> <a href="http://{{ server_ip }}:5555" target="_blank">http://{{ server_ip }}:5555</a></p>
+            <p><strong>Redis地址:</strong> {{ server_ip }}:6379</p>
+        </div>
+
+        <div class="grid">
+            <!-- 任务控制区域 -->
+            <div>
+                <div class="task-section">
+                    <h3>⏱️ 长时间运行任务</h3>
+                    <input type="number" id="duration" value="10" min="1" max="60"> 秒
+                    <button onclick="startLongTask()">启动长时间任务</button>
+                </div>
+
+                <div class="task-section">
+                    <h3>🧮 数学计算任务</h3>
+                    <input type="number" id="x" value="15" placeholder="数字 X">
+                    <input type="number" id="y" value="25" placeholder="数字 Y">
+                    <button onclick="startAddTask()">执行加法</button>
+                </div>
+
+                <div class="task-section">
+                    <h3>📊 数据处理任务</h3>
+                    <input type="text" id="data" value="1,2,3,4,5,6,7,8,9,10" placeholder="输入数字，用逗号分隔">
+                    <button onclick="startProcessData()">处理数据</button>
+                </div>
+
+                <div class="task-section">
+                    <h3>📧 邮件发送任务</h3>
+                    <input type="email" id="email" value="test@example.com" placeholder="邮箱地址">
+                    <input type="text" id="subject" value="测试主题" placeholder="邮件主题">
+                    <button onclick="startEmailTask()">发送邮件</button>
+                </div>
+
+                <div class="task-section">
+                    <h3>📈 报告生成任务</h3>
+                    <select id="report-type">
+                        <option value="销售">销售报告</option>
+                        <option value="财务">财务报告</option>
+                        <option value="运营">运营报告</option>
+                    </select>
+                    <button onclick="startReportTask()">生成报告</button>
+                </div>
+
+                <div class="task-section">
+                    <h3>❌ 失败测试任务</h3>
+                    <input type="number" id="fail-step" value="3" min="1" max="5" placeholder="在第几步失败 (1-5)">
+                    <button onclick="startFailingTask()">测试失败场景</button>
+                </div>
+            </div>
+
+            <!-- 任务状态显示区域 -->
+            <div>
+                <div class="task-section">
+                    <h3>📊 任务状态监控</h3>
+                    <button onclick="refreshAllStatus()">刷新所有状态</button>
+                    <button onclick="healthCheck()">健康检查</button>
+                    <div id="task-statuses"></div>
+                </div>
+
+                <div class="task-section">
+                    <h3>📈 系统统计</h3>
+                    <canvas id="taskChart" width="400" height="200"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let activeTasks = new Map();
+        let taskChart = null;
+        const SERVER_IP = '{{ server_ip }}';
+
+        // 启动各种任务
+        async function startLongTask() {
+            const duration = document.getElementById('duration').value;
+            await startTask('/start_long_task', {duration});
+        }
+
+        async function startAddTask() {
+            const x = document.getElementById('x').value;
+            const y = document.getElementById('y').value;
+            await startTask('/start_add_task', {x, y});
+        }
+
+        async function startProcessData() {
+            const data = document.getElementById('data').value;
+            await startTask('/start_process_data', {data});
+        }
+
+        async function startEmailTask() {
+            const email = document.getElementById('email').value;
+            const subject = document.getElementById('subject').value;
+            await startTask('/start_email_task', {email, subject});
+        }
+
+        async function startReportTask() {
+            const reportType = document.getElementById('report-type').value;
+            await startTask('/start_report_task', {report_type: reportType});
+        }
+
+        async function startFailingTask() {
+            const failAtStep = document.getElementById('fail-step').value;
+            await startTask('/start_failing_task', {fail_at_step: failAtStep});
+        }
+
+        // 健康检查
+        async function healthCheck() {
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+                alert(`健康检查: ${data.status}\n服务器: ${data.server_ip}\nRedis: ${data.redis}`);
+            } catch (error) {
+                alert('健康检查失败: ' + error);
+            }
+        }
+
+        // 通用任务启动函数
+        async function startTask(url, data) {
+            try {
+                const formData = new FormData();
+                for (const [key, value] of Object.entries(data)) {
+                    formData.append(key, value);
+                }
+
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.task_id) {
+                    activeTasks.set(result.task_id, {state: 'PENDING', lastUpdate: new Date()});
+                    updateTaskDisplay();
+                    startPolling(result.task_id);
+                    alert('任务启动成功! ID: ' + result.task_id);
+                } else if (result.error) {
+                    alert('任务启动失败: ' + result.error);
+                }
+            } catch (error) {
+                console.error('启动任务失败:', error);
+                alert('启动任务失败: ' + error);
+            }
+        }
+
+        // 轮询任务状态
+        function startPolling(taskId) {
+            const interval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/task_status/${taskId}`);
+                    const status = await response.json();
+
+                    activeTasks.set(taskId, {...status, lastUpdate: new Date()});
+                    updateTaskDisplay();
+                    updateChart();
+
+                    if (status.state === 'SUCCESS' || status.state === 'FAILURE') {
+                        clearInterval(interval);
+                    }
+                } catch (error) {
+                    console.error('查询任务状态失败:', error);
+                }
+            }, 1000);
+        }
+
+        // 更新任务状态显示
+        function updateTaskDisplay() {
+            const container = document.getElementById('task-statuses');
+            container.innerHTML = '';
+
+            if (activeTasks.size === 0) {
+                container.innerHTML = '<p>没有活跃的任务</p>';
+                return;
+            }
+
+            for (const [taskId, task] of activeTasks.entries()) {
+                const taskDiv = document.createElement('div');
+                taskDiv.className = `task-status ${getStatusClass(task.state)}`;
+
+                let content = `<strong>任务ID:</strong> ${taskId.substring(0, 8)}...<br>`;
+                content += `<strong>状态:</strong> ${task.state}<br>`;
+
+                if (task.status) {
+                    content += `<strong>信息:</strong> ${task.status}<br>`;
+                }
+
+                if (task.current !== undefined && task.total !== undefined) {
+                    const percentage = Math.round((task.current / task.total) * 100);
+                    content += `
+                        <div class="progress">
+                            <div class="progress-bar" style="width: ${percentage}%"></div>
+                        </div>
+                        <small>${task.current}/${task.total} (${percentage}%)</small><br>
+                    `;
+                }
+
+                if (task.result && task.state === 'SUCCESS') {
+                    content += `<strong>结果:</strong> ${task.result}<br>`;
+                }
+
+                if (task.state === 'FAILURE') {
+                    content += `<strong>错误:</strong> ${task.result}<br>`;
+                }
+
+                content += `<small>最后更新: ${task.lastUpdate.toLocaleTimeString()}</small>`;
+
+                taskDiv.innerHTML = content;
+                container.appendChild(taskDiv);
+            }
+        }
+
+        function getStatusClass(state) {
+            switch(state) {
+                case 'PENDING': return 'pending';
+                case 'PROGRESS': return 'progressing';
+                case 'SUCCESS': return 'success';
+                case 'FAILURE': return 'failure';
+                default: return 'pending';
+            }
+        }
+
+        // 更新统计图表
+        function updateChart() {
+            const ctx = document.getElementById('taskChart').getContext('2d');
+            const states = {
+                PENDING: 0,
+                PROGRESS: 0,
+                SUCCESS: 0,
+                FAILURE: 0
+            };
+
+            for (const task of activeTasks.values()) {
+                if (states.hasOwnProperty(task.state)) {
+                    states[task.state]++;
+                }
+            }
+
+            if (taskChart) {
+                taskChart.destroy();
+            }
+
+            taskChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['等待中', '进行中', '成功', '失败'],
+                    datasets: [{
+                        data: [states.PENDING, states.PROGRESS, states.SUCCESS, states.FAILURE],
+                        backgroundColor: ['#ffc107', '#17a2b8', '#28a745', '#dc3545']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: '任务状态分布'
+                        }
+                    }
+                }
+            });
+        }
+
+        // 工具函数
+        function refreshAllStatus() {
+            for (const taskId of activeTasks.keys()) {
+                startPolling(taskId);
+            }
+        }
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            updateChart();
+            console.log('系统初始化完成，服务器IP:', SERVER_IP);
+        });
+    </script>
+</body>
+</html>
